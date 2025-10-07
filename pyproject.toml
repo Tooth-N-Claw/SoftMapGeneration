@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "soft-map-generation"
+version = "0.1.0"
+description = "Align shapes based on Auto3dgm and generates soft maps from that"
+readme = "README.md"
+requires-python = ">=3.7"
+license = {file = "LICENSE"}
+
+
+dependencies = [
+    "numpy>=2.0.0",
+    "scipy>=1.0.0",
+    "trimesh>=4.0.0",
+    "lap>=0.4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.4.2",
+    "black>=25.0",
+    "flake8>=7.0.0",
+]
+
+
