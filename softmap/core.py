@@ -1,7 +1,8 @@
-
+from typing import Optional, Sequence
 from sklearn.neighbors import NearestNeighbors
 import os
 import numpy as np
+from numpy.typing import NDArray
 import trimesh
 import lap
 from numpy import linalg
@@ -149,65 +150,58 @@ def subsample_meshes(meshes, count):
     return low_res_meshes
         
 
-##### user parameters
-def process(knn=10, eps=None):
-    data_path = '116_teeth_data/'
-    print(data_path)
-    output_dir = 'out/'
-    print(output_dir)
-    os.makedirs(output_dir, exist_ok=True)
-    low_res = 400
+def compute_kernel(distances, eps):
+    kernel = distances.copy()
+    kernel.data = np.exp(-(kernel.data**2) / eps)
+    kernel.setdiag(1.0)
 
-    #### loading data into "data_col"
-    np.set_printoptions(suppress=True)
-    np.set_printoptions(precision=4)
-    orig_meshes, names = load_meshes(data_path, center_scale=True)
-    print('data loaded: num of shapes = ', str(len(orig_meshes)))
-    
-    sub_meshes = subsample_meshes(orig_meshes, low_res)
-    
-    # mesh1 = sub_meshes[0]
-    # for i in range(1,len(sub_meshes)):
-    #     mesh2 = sub_meshes[i]
-    #     orig = orig_meshes[i]
-    #     aa = locgpd(mesh1, mesh2, R_0=None, M_0=None, max_iter=1000, mirror=False)
-    #     v2T = aa['r'] @ orig.vertices.T
-        
-    #     aligned_mesh = (aa['r'] @ mesh2.vertices.T).T[aa['p']] # S2' = P @ S2 @ R
-        
-    #     # calculate pairwise distance using exp(-d_ij^2/eps)
-        
-    #     d = np.linalg.norm(mesh1.vertices - aligned_mesh, axis=1)
+    return kernel   
 
-     
-    #     nn = NearestNeighbors(
-    #         n_neighbors=config.base_knn, algorithm="auto", metric="euclidean", n_jobs=-1
-    #     )
-    #     nn.fit(data)
-    #     sparse_dist_matrix = nn.kneighbors_graph(data, mode="distance")
-        
-    #     eps = aa['g']**4 # todo is this correct
-    #     print(eps)
-    #     k = np.exp(-d**2 / eps)
-    #     np.set_printoptions(threshold=10000)
-    #     print(k)
-    #     exit()
-        # if np.linalg.det(aa['r']) < 0: # to make the orientation of the faces correct
-        #     orig.faces=orig.faces[:,[0,2,1]]
-        # aligned_mesh = trimesh.Trimesh(vertices=v2T.T, faces=orig.faces, process=False)
-        # name = names[i]
-        # aligned_mesh.export(output_dir + name)
+def process(
+    meshes: Sequence,
+    low_res: int = 400,
+    knn: int = 10,
+    eps: Optional[float] = None,
+    center_scale: bool = True
+) -> NDArray[np.float64]:
+    """Generate soft correspondence maps between meshes using Auto3DGM alignment.
 
-    if eps is None:
-        eps = 2 * aa['g']**2
+    Parameters
+    ----------
+    meshes : Sequence
+        Sequence of meshes to compute soft maps between
+    low_res : int, default=400
+        Number of vertices to subsample each mesh to
+    knn : int, default=10
+        Number of nearest neighbors for kernel computation
+    eps : float, optional
+        Kernel bandwidth parameter. If None, computed automatically from alignment
+    center_scale : bool, default=True
+        Whether to center and scale meshes before processing
+
+    Returns
+    -------
+    NDArray[np.float64]
+        NxN array of sparse soft correspondence maps between all mesh pairs
+    """
+    if center_scale:
+        for mesh in meshes:
+            Centralize(mesh, scale=1)
+    sub_meshes = subsample_meshes(meshes, low_res)
+
+
         
     n = len(sub_meshes)
-    maps = [[None for _ in range(n)] for _ in range(n)]
+    maps = np.array([[None for _ in range(n)] for _ in range(n)])
     for i in range(n):
+        print(i)
         for j in range(n):
-            if i == j:
-                continue
+            print(j)
+
             aa = locgpd(sub_meshes[i], sub_meshes[j], R_0=None, M_0=None, max_iter=1000, mirror=False)
+            if eps is None:
+                eps = 2 * aa['g']**2
+            eps += 0.0000000001
             aligned_mesh = (aa['r'] @ sub_meshes[j].vertices.T).T[aa['p']] 
             nn = NearestNeighbors(
                 n_neighbors=knn, algorithm="auto", metric="euclidean", n_jobs=-1
@@ -217,12 +211,6 @@ def process(knn=10, eps=None):
             maps[i,j] = compute_kernel(distances, eps)
     return np.array(maps)
 
-def compute_kernel(distances, eps):
-    kernel = distances.copy()
-    kernel.data = np.exp(-(kernel.data**2) / eps)
-    kernel.setdiag(1.0)
-
-    return kernel   
 
 if __name__ == "__main__":
     process()
