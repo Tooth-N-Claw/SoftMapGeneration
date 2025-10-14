@@ -149,17 +149,54 @@ def subsample_meshes(meshes, count):
     return low_res_meshes
         
 
-def compute_kernel(distances, eps):
-    kernel = distances.copy()
-    kernel.data = np.exp(-(kernel.data**2) / eps)
-    kernel.setdiag(1.0)
+##### user parameters
+def process(knn=10, eps=None):
+    data_path = '116_teeth_data/'
+    print(data_path)
+    output_dir = 'out/'
+    print(output_dir)
+    os.makedirs(output_dir, exist_ok=True)
+    low_res = 400
 
-    return kernel   
+    #### loading data into "data_col"
+    np.set_printoptions(suppress=True)
+    np.set_printoptions(precision=4)
+    orig_meshes, names = load_meshes(data_path, center_scale=True)
+    print('data loaded: num of shapes = ', str(len(orig_meshes)))
+    
+    sub_meshes = subsample_meshes(orig_meshes, low_res)
+    
+    # mesh1 = sub_meshes[0]
+    # for i in range(1,len(sub_meshes)):
+    #     mesh2 = sub_meshes[i]
+    #     orig = orig_meshes[i]
+    #     aa = locgpd(mesh1, mesh2, R_0=None, M_0=None, max_iter=1000, mirror=False)
+    #     v2T = aa['r'] @ orig.vertices.T
+        
+    #     aligned_mesh = (aa['r'] @ mesh2.vertices.T).T[aa['p']] # S2' = P @ S2 @ R
+        
+    #     # calculate pairwise distance using exp(-d_ij^2/eps)
+        
+    #     d = np.linalg.norm(mesh1.vertices - aligned_mesh, axis=1)
 
-def process(meshes, low_res=400, knn=10, eps=None, center_scale=True):
-    if center_scale:
-        Centralize(meshes, scale=1)
-    sub_meshes = subsample_meshes(meshes, low_res)
+     
+    #     nn = NearestNeighbors(
+    #         n_neighbors=config.base_knn, algorithm="auto", metric="euclidean", n_jobs=-1
+    #     )
+    #     nn.fit(data)
+    #     sparse_dist_matrix = nn.kneighbors_graph(data, mode="distance")
+        
+    #     eps = aa['g']**4 # todo is this correct
+    #     print(eps)
+    #     k = np.exp(-d**2 / eps)
+    #     np.set_printoptions(threshold=10000)
+    #     print(k)
+    #     exit()
+        # if np.linalg.det(aa['r']) < 0: # to make the orientation of the faces correct
+        #     orig.faces=orig.faces[:,[0,2,1]]
+        # aligned_mesh = trimesh.Trimesh(vertices=v2T.T, faces=orig.faces, process=False)
+        # name = names[i]
+        # aligned_mesh.export(output_dir + name)
 
     if eps is None:
         eps = 2 * aa['g']**2
@@ -180,6 +217,12 @@ def process(meshes, low_res=400, knn=10, eps=None, center_scale=True):
             maps[i,j] = compute_kernel(distances, eps)
     return np.array(maps)
 
+def compute_kernel(distances, eps):
+    kernel = distances.copy()
+    kernel.data = np.exp(-(kernel.data**2) / eps)
+    kernel.setdiag(1.0)
+
+    return kernel   
 
 if __name__ == "__main__":
     process()
