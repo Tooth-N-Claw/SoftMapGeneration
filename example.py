@@ -3,7 +3,7 @@ import trimesh
 import softmap
 
 
-def load_meshes(data_path, center_scale=True):
+def load_meshes(data_path):
     meshes = []
     for entry in os.listdir(data_path):
         if os.path.isfile(os.path.join(data_path, entry)):
