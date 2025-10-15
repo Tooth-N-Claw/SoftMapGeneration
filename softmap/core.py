@@ -7,12 +7,12 @@ import trimesh
 import lap
 from numpy import linalg
 from scipy.spatial import distance_matrix
-
+import pyvista as pv
 
 def principal_component_alignment(mesh1, mesh2, mirror):
     mirror = 1
-    X = mesh1.vertices.T
-    Y = mesh2.vertices.T
+    X = mesh1.T
+    Y = mesh2.T
     UX, DX, VX = linalg.svd(X, full_matrices=False)
     UY, DY, VY = linalg.svd(Y, full_matrices=False)
     P=[]
@@ -35,7 +35,7 @@ def best_pairwise_PCA_alignment(mesh1, mesh2, mirror):
     permutations = []
     min_cost = np.ones(len(R)) * np.inf
     for rot, i in zip(R, range(len(R))):
-        cost = distance_matrix(mesh1.vertices, np.dot(rot, mesh2.vertices.T).T)**2
+        cost = distance_matrix(mesh1, np.dot(rot, mesh2.T).T)**2
         trash, V2_ind, garbage = lap.lapjv(cost)
         min_cost[i] = trash
         permutations.append(V2_ind)
@@ -49,14 +49,14 @@ def best_pairwise_PCA_alignment(mesh1, mesh2, mirror):
 
 
 def permutation_from_rotation(mesh1, mesh2, R):
-    cost = distance_matrix(mesh1.vertices, np.dot(R, mesh2.vertices.T).T)**2
+    cost = distance_matrix(mesh1, np.dot(R, mesh2.T).T)**2
     trash, V2_ind, garbage = lap.lapjv(cost)
     return V2_ind
 
 def locgpd(mesh1, mesh2, R_0=None, M_0=None, max_iter=1000, mirror=False):
     # best_permutation and best_rot come from PCA
     if M_0 is None:
-        M_0 = np.ones([len(mesh1.vertices), len(mesh1.vertices)])
+        M_0 = np.ones([len(mesh1), len(mesh1)])
     
     if R_0 is None:
         best_permutation, best_rot, d = best_pairwise_PCA_alignment(mesh1, mesh2, mirror)
@@ -64,8 +64,8 @@ def locgpd(mesh1, mesh2, R_0=None, M_0=None, max_iter=1000, mirror=False):
         best_rot = R_0
         best_permutation = permutation_from_rotation(mesh1, mesh2, R_0)
 
-    V1 = mesh1.vertices.T
-    V2 = mesh2.vertices.T
+    V1 = mesh1.T
+    V2 = mesh2.T
     newV2 = V2
 
     i = 0
@@ -120,12 +120,12 @@ def Kabsch(A, B):
     return R
 
 def Centralize(mesh, scale=None):
-    Center = np.mean(mesh.vertices, 0).reshape(1,3)
-    foo = np.matlib.repmat(Center, len(mesh.vertices), 1)
-    mesh.vertices -= foo
+    Center = np.mean(mesh, 0).reshape(1,3)
+    foo = np.matlib.repmat(Center, len(mesh), 1)
+    mesh -= foo
     if scale != None:
-        #mesh.vertices = mesh.vertices * np.sqrt(1 / mesh.area)
-        mesh.vertices = mesh.vertices * (1 / np.linalg.norm(mesh.vertices, 'fro'))
+        #mesh = mesh * np.sqrt(1 / mesh.area)
+        mesh = mesh * (1 / np.linalg.norm(mesh, 'fro'))
     return mesh, Center
 
 def load_meshes(data_path, center_scale=True):
@@ -157,6 +157,42 @@ def compute_kernel(distances, eps):
 
     return kernel   
 
+
+def subsample(points, n_samples, important_indices=None):
+    selected = np.zeros(n_samples, dtype=int)
+    distances = np.ones(len(points)) * np.inf    
+    
+    # initial
+    if important_indices is not None:
+        selected[:len(important_indices)] = important_indices
+        
+        for idx in important_indices:
+            dist_to_point = np.linalg.norm(points - points[idx], axis=1)
+            distances = np.minimum(distances, dist_to_point)
+        
+        i = len(important_indices)
+    else:
+        selected[0] = np.random.randint(len(points))
+        i = 1
+    
+    # pick points that is furthest away
+    for i in range(i, n_samples):
+        if i > 0:
+            last_selected = selected[i-1]
+            dist_to_last = np.linalg.norm(points - points[last_selected], axis=1)
+            distances = np.minimum(distances, dist_to_last)
+        
+        selected[i] = np.argmax(distances)
+    
+    return points[selected]
+
+# def subsample(points, n_samples, important_indices=None):
+
+#     indices = np.random.choice(len(points), n_samples, replace=False)
+#     return points[indices]
+    
+
+
 def process(
     meshes: Sequence,
     low_res: int = 400,
@@ -187,29 +223,35 @@ def process(
     if center_scale:
         for mesh in meshes:
             Centralize(mesh, scale=1)
-    sub_meshes = subsample_meshes(meshes, low_res)
-
+    sub_meshes = []
+    for mesh in meshes:
+        sub_meshes.append(subsample(mesh, low_res))
+    sub_meshes = np.array(sub_meshes)
 
         
     n = len(sub_meshes)
     maps = np.array([[None for _ in range(n)] for _ in range(n)])
-    for i in range(n):
+    
+    # align teeth
+    for i in range(1,n):
         print(i)
+        aa = locgpd(sub_meshes[0], sub_meshes[i], R_0=None, M_0=None, max_iter=1000, mirror=False)
+        if eps is None:
+            eps = 2 * aa['g']**2
+        sub_meshes[i] = (aa['r'] @ sub_meshes[i].T).T[aa['p']] 
+    
+    for i in range(n):
         for j in range(n):
-            print(j)
-
-            aa = locgpd(sub_meshes[i], sub_meshes[j], R_0=None, M_0=None, max_iter=1000, mirror=False)
-            if eps is None:
-                eps = 2 * aa['g']**2
-            eps += 0.0000000001
-            aligned_mesh = (aa['r'] @ sub_meshes[j].vertices.T).T[aa['p']] 
             nn = NearestNeighbors(
                 n_neighbors=knn, algorithm="auto", metric="euclidean", n_jobs=-1
             )
-            nn.fit(sub_meshes[i].vertices)
-            distances = nn.kneighbors_graph(aligned_mesh, mode="distance")
+            nn.fit(sub_meshes[i])
+            
+            distances = nn.kneighbors_graph(sub_meshes[j], mode="distance")
             maps[i,j] = compute_kernel(distances, eps)
-    return np.array(maps)
+            maps[i,j].eliminate_zeros()
+            
+    return np.array(maps), sub_meshes
 
 
 if __name__ == "__main__":
