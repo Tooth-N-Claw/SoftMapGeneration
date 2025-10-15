@@ -8,6 +8,7 @@ import lap
 from numpy import linalg
 from scipy.spatial import distance_matrix
 import pyvista as pv
+from joblib import Parallel, delayed
 
 def principal_component_alignment(mesh1, mesh2, mirror):
     mirror = 1
@@ -190,14 +191,20 @@ def subsample(points, n_samples, important_indices=None):
 
 #     indices = np.random.choice(len(points), n_samples, replace=False)
 #     return points[indices]
-    
 
+
+def _compute_alignment(i, j, sub_meshes):
+    if i == j:
+        return i, j, sub_meshes[i]
+    else:
+        aa = locgpd(sub_meshes[i], sub_meshes[j], R_0=None, M_0=None, max_iter=1000, mirror=False)
+        return i, j, (aa['r'] @ sub_meshes[j].T).T[aa['p']]
 
 def process(
     meshes: Sequence,
+    eps: Optional[float] = 0.01,
     low_res: int = 400,
     knn: int = 10,
-    eps: Optional[float] = None,
     center_scale: bool = True
 ) -> NDArray[np.float64]:
     """Generate soft correspondence maps between meshes using Auto3DGM alignment.
@@ -231,27 +238,41 @@ def process(
         
     n = len(sub_meshes)
     maps = np.array([[None for _ in range(n)] for _ in range(n)])
-    
-    # align teeth
-    for i in range(1,n):
-        print(i)
-        aa = locgpd(sub_meshes[0], sub_meshes[i], R_0=None, M_0=None, max_iter=1000, mirror=False)
-        if eps is None:
-            eps = 2 * aa['g']**2
-        sub_meshes[i] = (aa['r'] @ sub_meshes[i].T).T[aa['p']] 
-    
+    aligned = np.array([[None for _ in range(n)] for _ in range(n)])
+
+    pairs = [(i, j) for i in range(n) for j in range(n)]
+    results = Parallel(n_jobs=-1, verbose=10)(
+        delayed(_compute_alignment)(i, j, sub_meshes)
+        for i, j in pairs
+    )
+
+    for i, j, result in results:
+        aligned[i, j] = result 
+        
+
     for i in range(n):
         for j in range(n):
+
             nn = NearestNeighbors(
                 n_neighbors=knn, algorithm="auto", metric="euclidean", n_jobs=-1
             )
             nn.fit(sub_meshes[i])
-            
-            distances = nn.kneighbors_graph(sub_meshes[j], mode="distance")
+            # if j > i: # since alignment is symmetric, we reuse for upper triangle
+            #     distances = nn.kneighbors_graph(aligned[j, i], mode="distance")
+            # else:
+            distances = nn.kneighbors_graph(aligned[i, j], mode="distance")
+
             maps[i,j] = compute_kernel(distances, eps)
             maps[i,j].eliminate_zeros()
             
-    return np.array(maps), sub_meshes
+            # normalize rows
+            row_sums = np.array(maps[i,j].sum(axis=1)).flatten()
+            row_indices, _ = maps[i,j].nonzero()
+            maps[i,j].data /= row_sums[row_indices]
+
+            
+            
+    return np.array(maps), aligned[0]
 
 
 if __name__ == "__main__":
