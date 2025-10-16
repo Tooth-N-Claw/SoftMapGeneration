@@ -271,6 +271,7 @@ def process(
     knn: int = 10,
     center_scale: bool = True,
     n_jobs: int = -1,
+    verbose: bool = True,
 ) -> NDArray[np.float64]:
     """Generate soft correspondence maps between meshes using Auto3DGM alignment.
 
@@ -288,13 +289,19 @@ def process(
         Whether to center and scale meshes before processing
     n_jobs : int, default=-1
         Number of parallel jobs to use. -1 uses all available cores.
+    verbose : bool, default=True
+        Whether to print progress information
 
     Returns
     -------
     NDArray[np.float64]
         NxN array of sparse soft correspondence maps between all mesh pairs
     """
-
+    if verbose:
+        verbose = 10
+    else:
+        verbose = 0
+        
     if center_scale:
         for i, mesh in enumerate(meshes):
             meshes[i], _ = Centralize(mesh, scale=1)
@@ -311,7 +318,7 @@ def process(
     maps = np.array([[None for _ in range(n)] for _ in range(n)])
     aligned = np.array([None for _ in range(n)])
 
-    results = Parallel(n_jobs=n_jobs, verbose=10)(
+    results = Parallel(n_jobs=n_jobs, verbose=verbose)(
         delayed(_compute_alignment)(0, i, sub_meshes)
         for i in range(0,n)
     )
@@ -320,7 +327,7 @@ def process(
         aligned[j] = result 
         
 
-    results = Parallel(n_jobs=n_jobs, verbose=10)(
+    results = Parallel(n_jobs=n_jobs, verbose=verbose)(
         delayed(_compute_maps_for_i)(i, aligned, knn, eps)
         for i in range(n)
     )
