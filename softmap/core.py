@@ -9,26 +9,63 @@ from numpy import linalg
 from scipy.spatial import distance_matrix
 import pyvista as pv
 from joblib import Parallel, delayed
+from itertools import product
+
+def _generate_sign_permutations(ndim, mirror):
+    """Generate all sign flip permutations for PCA alignment.
+
+    Parameters
+    ----------
+    ndim : int
+        Number of dimensions (2 or 3)
+    mirror : bool
+        Whether to include mirror reflections (all sign permutations)
+
+    Returns
+    -------
+    list of np.ndarray
+        List of sign permutation arrays
+    """
+    if mirror:
+        # All possible sign combinations: 2^ndim permutations
+        return [np.array(signs) for signs in product([1, -1], repeat=ndim)]
+    else:
+        # Only even number of sign flips (proper rotations, no reflections)
+        all_perms = [np.array(signs) for signs in product([1, -1], repeat=ndim)]
+        return [p for p in all_perms if np.prod(p) == 1]
 
 def principal_component_alignment(mesh1, mesh2, mirror):
+    """Compute PCA-based alignments between two meshes.
+
+    Parameters
+    ----------
+    mesh1, mesh2 : np.ndarray
+        Point clouds to align (shape: n_points x n_dimensions)
+    mirror : bool
+        Whether to include mirror reflections
+
+    Returns
+    -------
+    list of np.ndarray
+        List of rotation matrices for different alignment orientations
+    """
     mirror = 1
     X = mesh1.T
     Y = mesh2.T
+
+    # Detect dimensionality from input
+    ndim = X.shape[0]
+
     UX, DX, VX = linalg.svd(X, full_matrices=False)
     UY, DY, VY = linalg.svd(Y, full_matrices=False)
-    P=[]
-    R=[]
-    P.append(np.array([1, 1, 1]))
-    P.append(np.array([1, -1, -1]))
-    P.append(np.array([-1, -1, 1]))
-    P.append(np.array([-1, 1, -1]))
-    if (mirror == 1):
-        P.append(np.array([-1, 1, 1]))
-        P.append(np.array([1, -1, 1]))
-        P.append(np.array([1, 1, -1]))
-        P.append(np.array([-1, -1, -1]))
-    for i in P:
-        R.append(np.dot(np.dot(UX, np.diag(i)), UY.T))
+
+    # Generate sign permutations based on dimensionality
+    P = _generate_sign_permutations(ndim, mirror)
+
+    # Compute rotation matrices
+    R = []
+    for signs in P:
+        R.append(np.dot(np.dot(UX, np.diag(signs)), UY.T))
     return R
 
 def best_pairwise_PCA_alignment(mesh1, mesh2, mirror):
@@ -121,7 +158,7 @@ def Kabsch(A, B):
     return R
 
 def Centralize(mesh, scale=None):
-    Center = np.mean(mesh, 0).reshape(1,3)
+    Center = np.mean(mesh, 0).reshape(1,mesh.shape[1])
     foo = np.matlib.repmat(Center, len(mesh), 1)
     mesh -= foo
     if scale != None:
@@ -199,6 +236,7 @@ def _compute_alignment(i, j, sub_meshes):
     else:
         aa = locgpd(sub_meshes[i], sub_meshes[j], R_0=None, M_0=None, max_iter=1000, mirror=False)
         return i, j, (aa['r'] @ sub_meshes[j].T).T[aa['p']]
+        # return i, j, (aa['r'] @ meshes[j].T).T
 
 def process(
     meshes: Sequence,
@@ -227,9 +265,63 @@ def process(
     NDArray[np.float64]
         NxN array of sparse soft correspondence maps between all mesh pairs
     """
+    # if center_scale:
+    #     for i, mesh in enumerate(meshes):
+    #         meshes[i], _ = Centralize(mesh, scale=1)
+    # min_val = min([len(mesh) for mesh in meshes])
+    # low_res = min(low_res, min_val)
+    # sub_meshes = []
+    # for mesh in meshes:
+    #     sub_meshes.append(subsample(mesh, low_res))
+    # sub_meshes = np.array(sub_meshes)
+
+        
+    # n = len(sub_meshes)
+    # maps = np.array([[None for _ in range(n)] for _ in range(n)])
+    # aligned = np.array([[None for _ in range(n)] for _ in range(n)])
+
+    # pairs = [(i, j) for i in range(n) for j in range(n)]
+    # results = Parallel(n_jobs=-1, verbose=10)(
+    #     delayed(_compute_alignment)(i, j, sub_meshes)
+    #     # delayed(_compute_alignment)(i, j, sub_meshes, meshes)
+    #     for i, j in pairs
+    # )
+
+    # for i, j, result in results:
+    #     aligned[i, j] = result 
+        
+
+    # for i in range(n):
+    #     nn = NearestNeighbors(
+    #         n_neighbors=knn, algorithm="auto", metric="euclidean", n_jobs=-1
+    #     )
+    #     nn.fit(aligned[i, i])
+    #     for j in range(n):
+
+
+    #         # if j > i: # since alignment is symmetric, we reuse for upper triangle
+    #         #     distances = nn.kneighbors_graph(aligned[j, i], mode="distance")
+    #         # else:
+    #         distances = nn.kneighbors_graph(aligned[i, j], mode="distance")
+
+    #         maps[i,j] = compute_kernel(distances, eps)
+    #         maps[i,j].eliminate_zeros()
+            
+    #         # normalize rows
+    #         row_sums = np.array(maps[i,j].sum(axis=1)).flatten()
+    #         row_indices, _ = maps[i,j].nonzero()
+    #         maps[i,j].data /= row_sums[row_indices]
+
+            
+            
+    # return np.array(maps), np.diag(aligned)
+    
     if center_scale:
-        for mesh in meshes:
-            Centralize(mesh, scale=1)
+        for i, mesh in enumerate(meshes):
+            meshes[i], _ = Centralize(mesh, scale=1)
+            
+    min_val = min([len(mesh) for mesh in meshes])
+    low_res = min(low_res, min_val)
     sub_meshes = []
     for mesh in meshes:
         sub_meshes.append(subsample(mesh, low_res))
@@ -238,29 +330,30 @@ def process(
         
     n = len(sub_meshes)
     maps = np.array([[None for _ in range(n)] for _ in range(n)])
-    aligned = np.array([[None for _ in range(n)] for _ in range(n)])
+    aligned = np.array([None for _ in range(n)])
 
-    pairs = [(i, j) for i in range(n) for j in range(n)]
     results = Parallel(n_jobs=-1, verbose=10)(
-        delayed(_compute_alignment)(i, j, sub_meshes)
-        for i, j in pairs
+        delayed(_compute_alignment)(0, i, sub_meshes)
+        # delayed(_compute_alignment)(i, j, sub_meshes, meshes)
+        for i in range(0,n)
     )
 
     for i, j, result in results:
-        aligned[i, j] = result 
+        aligned[j] = result 
         
 
     for i in range(n):
+        nn = NearestNeighbors(
+            n_neighbors=knn, algorithm="auto", metric="euclidean", n_jobs=-1
+        )
+        nn.fit(aligned[i])
         for j in range(n):
 
-            nn = NearestNeighbors(
-                n_neighbors=knn, algorithm="auto", metric="euclidean", n_jobs=-1
-            )
-            nn.fit(sub_meshes[i])
+
             # if j > i: # since alignment is symmetric, we reuse for upper triangle
             #     distances = nn.kneighbors_graph(aligned[j, i], mode="distance")
             # else:
-            distances = nn.kneighbors_graph(aligned[i, j], mode="distance")
+            distances = nn.kneighbors_graph(aligned[j], mode="distance")
 
             maps[i,j] = compute_kernel(distances, eps)
             maps[i,j].eliminate_zeros()
@@ -270,10 +363,7 @@ def process(
             row_indices, _ = maps[i,j].nonzero()
             maps[i,j].data /= row_sums[row_indices]
 
-            
-            
-    return np.array(maps), aligned[0]
-
+    return np.array(maps), aligned
 
 if __name__ == "__main__":
     process()
