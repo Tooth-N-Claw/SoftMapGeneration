@@ -236,14 +236,41 @@ def _compute_alignment(i, j, sub_meshes):
     else:
         aa = locgpd(sub_meshes[i], sub_meshes[j], R_0=None, M_0=None, max_iter=1000, mirror=False)
         return i, j, (aa['r'] @ sub_meshes[j].T).T[aa['p']]
-        # return i, j, (aa['r'] @ meshes[j].T).T
+
+
+def _compute_maps_for_i(i, aligned, knn, eps):
+    n = len(aligned)
+    nn = NearestNeighbors(
+        n_neighbors=knn, algorithm="auto", metric="euclidean", n_jobs=-1
+    )
+    nn.fit(aligned[i])
+
+    maps_row = []
+    for j in range(n):
+        distances = nn.kneighbors_graph(aligned[j], mode="distance")
+
+        kernel = compute_kernel(distances, eps)
+        kernel.eliminate_zeros()
+
+        # normalize rows
+        row_sums = np.array(kernel.sum(axis=1)).flatten()
+        row_indices, _ = kernel.nonzero()
+        kernel.data /= row_sums[row_indices]
+
+        maps_row.append(kernel)
+
+    return i, maps_row
+
+
+
 
 def process(
     meshes: Sequence,
     eps: Optional[float] = 0.01,
     low_res: int = 400,
     knn: int = 10,
-    center_scale: bool = True
+    center_scale: bool = True,
+    n_jobs: int = -1,
 ) -> NDArray[np.float64]:
     """Generate soft correspondence maps between meshes using Auto3DGM alignment.
 
@@ -259,63 +286,15 @@ def process(
         Kernel bandwidth parameter. If None, computed automatically from alignment
     center_scale : bool, default=True
         Whether to center and scale meshes before processing
+    n_jobs : int, default=-1
+        Number of parallel jobs to use. -1 uses all available cores.
 
     Returns
     -------
     NDArray[np.float64]
         NxN array of sparse soft correspondence maps between all mesh pairs
     """
-    # if center_scale:
-    #     for i, mesh in enumerate(meshes):
-    #         meshes[i], _ = Centralize(mesh, scale=1)
-    # min_val = min([len(mesh) for mesh in meshes])
-    # low_res = min(low_res, min_val)
-    # sub_meshes = []
-    # for mesh in meshes:
-    #     sub_meshes.append(subsample(mesh, low_res))
-    # sub_meshes = np.array(sub_meshes)
 
-        
-    # n = len(sub_meshes)
-    # maps = np.array([[None for _ in range(n)] for _ in range(n)])
-    # aligned = np.array([[None for _ in range(n)] for _ in range(n)])
-
-    # pairs = [(i, j) for i in range(n) for j in range(n)]
-    # results = Parallel(n_jobs=-1, verbose=10)(
-    #     delayed(_compute_alignment)(i, j, sub_meshes)
-    #     # delayed(_compute_alignment)(i, j, sub_meshes, meshes)
-    #     for i, j in pairs
-    # )
-
-    # for i, j, result in results:
-    #     aligned[i, j] = result 
-        
-
-    # for i in range(n):
-    #     nn = NearestNeighbors(
-    #         n_neighbors=knn, algorithm="auto", metric="euclidean", n_jobs=-1
-    #     )
-    #     nn.fit(aligned[i, i])
-    #     for j in range(n):
-
-
-    #         # if j > i: # since alignment is symmetric, we reuse for upper triangle
-    #         #     distances = nn.kneighbors_graph(aligned[j, i], mode="distance")
-    #         # else:
-    #         distances = nn.kneighbors_graph(aligned[i, j], mode="distance")
-
-    #         maps[i,j] = compute_kernel(distances, eps)
-    #         maps[i,j].eliminate_zeros()
-            
-    #         # normalize rows
-    #         row_sums = np.array(maps[i,j].sum(axis=1)).flatten()
-    #         row_indices, _ = maps[i,j].nonzero()
-    #         maps[i,j].data /= row_sums[row_indices]
-
-            
-            
-    # return np.array(maps), np.diag(aligned)
-    
     if center_scale:
         for i, mesh in enumerate(meshes):
             meshes[i], _ = Centralize(mesh, scale=1)
@@ -332,9 +311,8 @@ def process(
     maps = np.array([[None for _ in range(n)] for _ in range(n)])
     aligned = np.array([None for _ in range(n)])
 
-    results = Parallel(n_jobs=-1, verbose=10)(
+    results = Parallel(n_jobs=n_jobs, verbose=10)(
         delayed(_compute_alignment)(0, i, sub_meshes)
-        # delayed(_compute_alignment)(i, j, sub_meshes, meshes)
         for i in range(0,n)
     )
 
@@ -342,26 +320,14 @@ def process(
         aligned[j] = result 
         
 
-    for i in range(n):
-        nn = NearestNeighbors(
-            n_neighbors=knn, algorithm="auto", metric="euclidean", n_jobs=-1
-        )
-        nn.fit(aligned[i])
+    results = Parallel(n_jobs=n_jobs, verbose=10)(
+        delayed(_compute_maps_for_i)(i, aligned, knn, eps)
+        for i in range(n)
+    )
+
+    for i, maps_row in results:
         for j in range(n):
-
-
-            # if j > i: # since alignment is symmetric, we reuse for upper triangle
-            #     distances = nn.kneighbors_graph(aligned[j, i], mode="distance")
-            # else:
-            distances = nn.kneighbors_graph(aligned[j], mode="distance")
-
-            maps[i,j] = compute_kernel(distances, eps)
-            maps[i,j].eliminate_zeros()
-            
-            # normalize rows
-            row_sums = np.array(maps[i,j].sum(axis=1)).flatten()
-            row_indices, _ = maps[i,j].nonzero()
-            maps[i,j].data /= row_sums[row_indices]
+            maps[i, j] = maps_row[j]
 
     return np.array(maps), aligned
 
