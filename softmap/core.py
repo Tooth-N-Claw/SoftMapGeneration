@@ -272,6 +272,7 @@ def process(
     center_scale: bool = True,
     n_jobs: int = -1,
     verbose: bool = True,
+    landmark_indices: Optional[Sequence[int]] = None,
 ) -> NDArray[np.float64]:
     """Generate soft correspondence maps between meshes using Auto3DGM alignment.
 
@@ -291,6 +292,9 @@ def process(
         Number of parallel jobs to use. -1 uses all available cores.
     verbose : bool, default=True
         Whether to print progress information
+    landmark_indices : Optional[Sequence[int]], default=None
+        Indices of landmark points to always include in subsampling
+        Assumed to be passed in the same order as the meshes
 
     Returns
     -------
@@ -309,8 +313,11 @@ def process(
     min_val = min([len(mesh) for mesh in meshes])
     low_res = min(low_res, min_val)
     sub_meshes = []
-    for mesh in meshes:
-        sub_meshes.append(subsample(mesh, low_res))
+    for i in range(len(meshes)):
+        if landmark_indices is not None:
+            sub_meshes.append(subsample(meshes[i], low_res, important_indices=landmark_indices[i]))
+        else:
+            sub_meshes.append(subsample(meshes[i], low_res))
     sub_meshes = np.array(sub_meshes)
 
         
