@@ -199,7 +199,7 @@ def compute_kernel(distances, eps):
 def subsample(points, n_samples, important_indices=None):
     selected = np.zeros(n_samples, dtype=int)
     distances = np.ones(len(points)) * np.inf    
-    
+
     # initial
     if important_indices is not None:
         selected[:len(important_indices)] = important_indices
@@ -219,10 +219,11 @@ def subsample(points, n_samples, important_indices=None):
             last_selected = selected[i-1]
             dist_to_last = np.linalg.norm(points - points[last_selected], axis=1)
             distances = np.minimum(distances, dist_to_last)
+
         
         selected[i] = np.argmax(distances)
-    
-    return points[selected]
+        
+    return points[selected], selected
 
 # def subsample(points, n_samples, important_indices=None):
 
@@ -230,12 +231,16 @@ def subsample(points, n_samples, important_indices=None):
 #     return points[indices]
 
 
-def _compute_alignment(i, j, sub_meshes):
+def _compute_alignment(i, j, sub_meshes, n_landmarks, old_indices):
     if i == j:
-        return i, j, sub_meshes[i]
+        landmark_indices = np.arange(n_landmarks) if n_landmarks > 0 else np.array([])
+        return i, j, sub_meshes[i], landmark_indices, old_indices[j]
     else:
         aa = locgpd(sub_meshes[i], sub_meshes[j], R_0=None, M_0=None, max_iter=1000, mirror=False)
-        return i, j, (aa['r'] @ sub_meshes[j].T).T[aa['p']]
+        aligned_mesh = (aa['r'] @ sub_meshes[j].T).T[aa['p']]
+        landmark_indices = np.argsort(aa['p'])[:n_landmarks] if n_landmarks > 0 else np.array([])
+        corresponding_old_indices = old_indices[j][aa['p']]
+        return i, j, aligned_mesh, landmark_indices, corresponding_old_indices
 
 
 def _compute_maps_for_i(i, aligned, knn, eps):
@@ -298,8 +303,16 @@ def process(
 
     Returns
     -------
-    NDArray[np.float64]
+    maps : NDArray[np.float64]
         NxN array of sparse soft correspondence maps between all mesh pairs
+    aligned : NDArray
+        Array of N aligned meshes, all aligned to the first mesh
+    aligned_landmark_indices : NDArray
+        Array of N landmark index arrays, where aligned_landmark_indices[i] contains
+        the indices of landmarks in aligned mesh i after permutation
+    corresponding_old_indices_list : NDArray
+        Array of N arrays, where corresponding_old_indices_list[i] contains the mapping
+        from aligned mesh i's vertices to the original mesh i's vertices
     """
     if verbose:
         verbose = 10
@@ -313,25 +326,35 @@ def process(
     min_val = min([len(mesh) for mesh in meshes])
     low_res = min(low_res, min_val)
     sub_meshes = []
+    old_indices = []
     for i in range(len(meshes)):
         if landmark_indices is not None:
-            sub_meshes.append(subsample(meshes[i], low_res, important_indices=landmark_indices[i]))
-        else:
-            sub_meshes.append(subsample(meshes[i], low_res))
+            important_indices = landmark_indices[i]
+        points, _old_indices = subsample(meshes[i], low_res, important_indices=important_indices)
+        sub_meshes.append(points)
+        old_indices.append(_old_indices)
     sub_meshes = np.array(sub_meshes)
+    old_indices = np.array(old_indices)
 
         
     n = len(sub_meshes)
     maps = np.array([[None for _ in range(n)] for _ in range(n)])
     aligned = np.array([None for _ in range(n)])
 
+    # Calculate number of landmarks
+    n_landmarks = len(landmark_indices[0]) if landmark_indices is not None else 0
+    aligned_landmark_indices = np.array([None for _ in range(n)])
+
     results = Parallel(n_jobs=n_jobs, verbose=verbose)(
-        delayed(_compute_alignment)(0, i, sub_meshes)
+        delayed(_compute_alignment)(0, i, sub_meshes, n_landmarks, old_indices)
         for i in range(0,n)
     )
 
-    for i, j, result in results:
-        aligned[j] = result 
+    corresponding_old_indices_list = np.array([None for _ in range(n)])
+    for i, j, result, landmarks, corresponding_old_indices in results:
+        aligned[j] = result
+        aligned_landmark_indices[j] = landmarks 
+        corresponding_old_indices_list[j] = corresponding_old_indices
         
 
     results = Parallel(n_jobs=n_jobs, verbose=verbose)(
@@ -343,7 +366,7 @@ def process(
         for j in range(n):
             maps[i, j] = maps_row[j]
 
-    return np.array(maps), aligned
+    return np.array(maps), aligned, aligned_landmark_indices, corresponding_old_indices_list    
 
 if __name__ == "__main__":
     process()
